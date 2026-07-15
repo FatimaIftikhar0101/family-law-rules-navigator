@@ -4,9 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Family Law Rules Navigator — O. Reg. 114/99 (Ontario)</title>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
 /* ── Token system ─────────────────────────────────────────────────────── */
 :root {
@@ -206,7 +203,6 @@ textarea:focus-visible {
   font-size: 25px;
   font-weight: 700;
   letter-spacing: -.01em;
-  text-wrap: balance;
 }
 .mast-sub {
   font-size: 13.5px;
@@ -413,7 +409,6 @@ pre.raw {
   font-size: 20px;
   font-weight: 700;
   margin: 3px 0 12px;
-  text-wrap: balance;
 }
 
 .src-row { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -587,7 +582,7 @@ pre.raw {
   gap: 9px;
   align-items: center;
 }
-.index-arrow { color: var(--copper); transition: transform .2s; }
+.index-arrow { color: var(--copper); transition: transform .2s; display: inline-block; }
 .index-arrow.open { transform: rotate(90deg); }
 .index-grid {
   display: grid;
@@ -665,9 +660,93 @@ pre.raw {
   </style>
 </head>
 <body>
-<div id="root"></div>
-<script type="text/babel" data-presets="react">
-const { useState, useRef, useEffect } = React;
+
+<!-- API key banner -->
+<div class="key-banner">
+  <span class="key-label">Anthropic API key</span>
+  <div class="key-field-wrap">
+    <input id="key-input" class="key-input" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+    <button id="key-toggle" class="key-toggle" type="button">Show</button>
+  </div>
+  <span id="key-status" class="key-missing">Enter a key to enable search</span>
+</div>
+
+<div class="wrap">
+  <header class="masthead">
+    <div class="crest">
+      <span class="crest-reg">O. Reg.</span>
+      <span class="crest-num">114/99</span>
+    </div>
+    <div class="mast-text">
+      <h1>Family Law Rules Navigator</h1>
+      <p class="mast-sub">Ask in plain language — jump to the governing Rule, its test, and the leading authorities.</p>
+    </div>
+  </header>
+
+  <div class="caution" role="note">
+    <strong>Research aid, not authority.</strong>&ensp;AI-surfaced case law can be wrong or fabricated.
+    Read the rule text and confirm every citation on CanLII before you rely on or cite it.
+  </div>
+
+  <section class="search-section">
+    <div class="search-card">
+      <textarea
+        id="query-input"
+        class="search-textarea"
+        rows="2"
+        placeholder="e.g. Opposing counsel wants to bring a motion to dismiss for delay — which rule governs?"
+      ></textarea>
+      <div class="search-footer">
+        <label class="toggle-label" title="Runs a live web search to verify citations. Slower but more accurate.">
+          <input type="checkbox" id="grounded-toggle" checked>
+          <span id="grounded-label">Grounded (web-verified)</span>
+        </label>
+        <button id="btn-go" class="btn-go">Find the rule</button>
+      </div>
+    </div>
+    <div id="starters" class="starters"></div>
+    <div class="hint">⌘ / Ctrl + Enter to search</div>
+  </section>
+
+  <div id="loading-panel" class="panel loading-panel" style="display:none">
+    <div class="spinner"></div>
+    <div>
+      <div class="loading-title" id="loading-title">Reading the Rules…</div>
+      <div class="loading-sub">Routing your question to O. Reg. 114/99.</div>
+    </div>
+  </div>
+
+  <div id="error-panel" class="panel error-panel" style="display:none">
+    <div class="error-title">Couldn't complete the search</div>
+    <div class="error-body" id="error-body"></div>
+    <button class="btn-retry" id="btn-retry">Try again</button>
+  </div>
+
+  <div id="raw-panel" class="panel" style="display:none">
+    <div class="raw-label">Unstructured reply</div>
+    <pre class="raw" id="raw-body"></pre>
+  </div>
+
+  <div id="result-container"></div>
+
+  <section class="index-wrap">
+    <button class="index-toggle" id="index-toggle">
+      <span class="index-arrow" id="index-arrow">▶</span>
+      Browse all rules by stage of a case
+    </button>
+    <div id="index-grid" class="index-grid" style="display:none"></div>
+  </section>
+
+  <footer class="foot">
+    Sources link to
+    <a href="https://www.ontario.ca/laws/regulation/990114" target="_blank" rel="noreferrer">Ontario e-Laws</a> and
+    <a href="https://www.canlii.org/en/on/laws/regu/o-reg-114-99/latest/o-reg-114-99.html" target="_blank" rel="noreferrer">CanLII</a>.
+    Not legal advice; verify against the current consolidated regulation.
+  </footer>
+</div>
+
+<script>
+"use strict";
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 const ELAWS  = "https://www.ontario.ca/laws/regulation/990114";
@@ -740,44 +819,6 @@ const STARTERS = [
   "When is a case conference required before a motion?",
 ];
 
-/* ── Helpers ────────────────────────────────────────────────────────────── */
-const canliiCase = (name, cite) =>
-  "https://www.canlii.org/en/#search/text=" + encodeURIComponent([name, cite].filter(Boolean).join(" "));
-
-function ruleMeta(num) {
-  const clean = String(num || "").replace(/[^0-9.]/g, "");
-  const found  = RULES.find(r => r.n === clean);
-  const whole  = /^\d+$/.test(clean);
-  return {
-    title:  found ? found.t : "",
-    elaws:  ELAWS,
-    canlii: whole ? `${CANLII}#sec${clean}` : CANLII,
-  };
-}
-
-function extractJSON(raw) {
-  if (!raw) return null;
-  const text  = raw.replace(/```json/gi, "").replace(/```/g, "");
-  const start = text.indexOf("{");
-  if (start < 0) return null;
-  let depth = 0, inStr = false, esc = false;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i];
-    if (inStr) {
-      if (esc)        esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"')  inStr = false;
-    } else if (c === '"') inStr = true;
-    else if (c === "{")   depth++;
-    else if (c === "}") {
-      if (--depth === 0) {
-        try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; }
-      }
-    }
-  }
-  return null;
-}
-
 const SYSTEM = `You are a precise legal-research assistant specialised in the Ontario Family Law Rules (O. Reg. 114/99), made under the Courts of Justice Act. Your user is a licensed Ontario family law lawyer. Tune to general Ontario family practice covering both the Superior Court of Justice and the Ontario Court of Justice.
 
 For each question:
@@ -805,6 +846,118 @@ Output ONLY one valid JSON object, no markdown, no preamble, exactly this shape:
 }
 If a field is unknown use an empty string or empty array.`;
 
+const CONF_META = {
+  high:   { c: "#2F7A4F", label: "widely cited" },
+  medium: { c: "#B8842B", label: "verify" },
+  low:    { c: "#A6362F", label: "verify carefully" },
+};
+
+/* ── Helpers ────────────────────────────────────────────────────────────── */
+function esc(s) {
+  return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+function canliiCase(name, cite) {
+  return "https://www.canlii.org/en/#search/text=" + encodeURIComponent([name, cite].filter(Boolean).join(" "));
+}
+
+function ruleMeta(num) {
+  const clean = String(num || "").replace(/[^0-9.]/g, "");
+  const found = RULES.find(r => r.n === clean);
+  const whole = /^\d+$/.test(clean);
+  return {
+    title:  found ? found.t : "",
+    elaws:  ELAWS,
+    canlii: whole ? CANLII + "#sec" + clean : CANLII,
+  };
+}
+
+function extractJSON(raw) {
+  if (!raw) return null;
+  const text  = raw.replace(/```json/gi, "").replace(/```/g, "");
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0, inStr = false, escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (escaped)       escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"')  inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === "{")   depth++;
+    else if (c === "}") {
+      if (--depth === 0) {
+        try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+function buildMemo(data, grounded, question) {
+  const p     = data.primaryRule || {};
+  const meta  = ruleMeta(p.number);
+  const title = p.title || meta.title;
+  const L = [];
+  const push = (...lines) => L.push(...lines);
+  const today = new Date().toLocaleDateString("en-CA", { year:"numeric", month:"long", day:"numeric" });
+
+  push("MEMORANDUM", "");
+  if (question) push("Re:   " + question);
+  push("Rule: Rule " + p.number + " — " + title + " (O. Reg. 114/99)");
+  push("Date: " + today, "");
+
+  if (data.summary) push("SUMMARY", data.summary, "");
+
+  if (Array.isArray(data.legalTests) && data.legalTests.length) {
+    push("LEGAL TEST");
+    data.legalTests.forEach(t => {
+      push(t.name + (t.source ? "  (" + t.source + ")" : ""));
+      (t.elements || []).forEach((el, i) => push("   " + (i + 1) + ". " + el));
+      push("");
+    });
+  }
+  if (Array.isArray(data.caseLaw) && data.caseLaw.length) {
+    push("LEADING AUTHORITIES  — verify every citation before relying on it");
+    data.caseLaw.forEach(c => {
+      const line = [c.name, c.citation, c.court, c.year].filter(Boolean).join(", ");
+      push("- " + line + (c.confidence ? " [" + c.confidence + "]" : ""));
+      if (c.holding) push("  Holding: " + c.holding);
+    });
+    push("");
+  }
+  if (Array.isArray(data.practiceNotes) && data.practiceNotes.length) {
+    push("PRACTICE NOTES");
+    data.practiceNotes.forEach(n => push("- " + n));
+    push("");
+  }
+  if (Array.isArray(data.relatedRules) && data.relatedRules.length) {
+    push("RELATED RULES");
+    data.relatedRules.forEach(r => push("- r. " + r.number + " — " + (r.title || ruleMeta(r.number).title)));
+    push("");
+  }
+  if (Array.isArray(data.ruleCitations) && data.ruleCitations.length)
+    push("Provisions cited: " + data.ruleCitations.join(", "), "");
+
+  push("Sources: CanLII " + meta.canlii + " | Ontario e-Laws " + meta.elaws, "");
+  push("Prepared with AI assistance" + (grounded ? " (web-grounded)" : "") + ". Case law and citations must be independently verified before use. Not legal advice.");
+  return L.join("\n");
+}
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+  } catch {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta); return ok;
+  } catch { return false; }
+}
+
 /* ── API call ───────────────────────────────────────────────────────────── */
 async function askClaude(question, grounded, apiKey) {
   if (!apiKey || !apiKey.trim()) {
@@ -816,7 +969,7 @@ async function askClaude(question, grounded, apiKey) {
     system: SYSTEM,
     messages: [{
       role: "user",
-      content: `Question: ${question}\n\nReturn only the JSON object described in your instructions.`,
+      content: "Question: " + question + "\n\nReturn only the JSON object described in your instructions.",
     }],
   };
   if (grounded) body.tools = [{ type: "web_search_20250305", name: "web_search" }];
@@ -834,413 +987,287 @@ async function askClaude(question, grounded, apiKey) {
   if (!res.ok) {
     let detail = "";
     try { detail = (await res.json())?.error?.message || ""; } catch {}
-    throw new Error(`Request failed (${res.status}). ${detail}`.trim());
+    throw new Error("Request failed (" + res.status + "). " + detail);
   }
   const data = await res.json();
   const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n").trim();
   return { parsed: extractJSON(text), raw: text };
 }
 
-/* ── Memo builder ───────────────────────────────────────────────────────── */
-function buildMemo(data, grounded, question) {
+/* ── DOM rendering ──────────────────────────────────────────────────────── */
+function renderResult(data, grounded, question) {
   const p     = data.primaryRule || {};
   const meta  = ruleMeta(p.number);
   const title = p.title || meta.title;
-  const L = [];
-  const push = (...lines) => L.push(...lines);
-  const today = new Date().toLocaleDateString("en-CA", { year:"numeric", month:"long", day:"numeric" });
 
-  push("MEMORANDUM", "");
-  if (question) push(`Re:   ${question}`);
-  push(`Rule: Rule ${p.number} — ${title} (O. Reg. 114/99)`);
-  push(`Date: ${today}`, "");
+  let html = '<div class="result">';
 
-  if (data.summary) push("SUMMARY", data.summary, "");
+  /* head */
+  html += '<div class="result-head">';
+  html += '<div class="big-num" aria-hidden="true">' + esc(p.number) + '</div>';
+  html += '<div class="result-head-text">';
+  html += '<div class="eyebrow">Governing rule · O. Reg. 114/99</div>';
+  html += '<h2>Rule ' + esc(p.number) + ' — ' + esc(title) + '</h2>';
+  html += '<div class="src-row">';
+  html += '<a class="src-btn primary" href="' + esc(meta.canlii) + '" target="_blank" rel="noreferrer">Rule ' + esc(p.number) + ' on CanLII ↗</a>';
+  html += '<a class="src-btn" href="' + esc(meta.elaws) + '" target="_blank" rel="noreferrer">Ontario e-Laws ↗</a>';
+  html += '</div>';
+  html += '<div class="memo-bar">';
+  html += '<button class="memo-btn" id="memo-btn">▤ Copy to memo</button>';
+  html += '<span class="copied" id="copy-status"></span>';
+  html += '</div>';
+  html += '</div></div>'; /* /result-head-text /result-head */
 
+  /* summary */
+  if (data.summary) {
+    html += '<div class="block"><h4 class="block-h">In plain terms</h4>';
+    html += '<p class="summary-text">' + esc(data.summary) + '</p></div>';
+  }
+
+  /* legal tests */
   if (Array.isArray(data.legalTests) && data.legalTests.length) {
-    push("LEGAL TEST");
+    html += '<div class="block"><h4 class="block-h">Legal test</h4>';
     data.legalTests.forEach(t => {
-      push(`${t.name}${t.source ? `  (${t.source})` : ""}`);
-      (t.elements || []).forEach((el, i) => push(`   ${i + 1}. ${el}`));
-      push("");
-    });
-  }
-  if (Array.isArray(data.caseLaw) && data.caseLaw.length) {
-    push("LEADING AUTHORITIES  — verify every citation before relying on it");
-    data.caseLaw.forEach(c => {
-      const line = [c.name, c.citation, c.court, c.year].filter(Boolean).join(", ");
-      push(`- ${line}${c.confidence ? ` [${c.confidence}]` : ""}`);
-      if (c.holding) push(`  Holding: ${c.holding}`);
-    });
-    push("");
-  }
-  if (Array.isArray(data.practiceNotes) && data.practiceNotes.length) {
-    push("PRACTICE NOTES");
-    data.practiceNotes.forEach(n => push(`- ${n}`));
-    push("");
-  }
-  if (Array.isArray(data.relatedRules) && data.relatedRules.length) {
-    push("RELATED RULES");
-    data.relatedRules.forEach(r => push(`- r. ${r.number} — ${r.title || ruleMeta(r.number).title}`));
-    push("");
-  }
-  if (Array.isArray(data.ruleCitations) && data.ruleCitations.length)
-    push(`Provisions cited: ${data.ruleCitations.join(", ")}`, "");
-
-  push(`Sources: CanLII ${meta.canlii} | Ontario e-Laws ${meta.elaws}`, "");
-  push(`Prepared with AI assistance${grounded ? " (web-grounded)" : ""}. Case law and citations must be independently verified before use. Not legal advice.`);
-  return L.join("\n");
-}
-
-async function copyText(text) {
-  try {
-    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
-  } catch {}
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta); ta.focus(); ta.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta); return ok;
-  } catch { return false; }
-}
-
-/* ── Small components ───────────────────────────────────────────────────── */
-const CONF_META = {
-  high:   { c: "#2F7A4F", label: "widely cited" },
-  medium: { c: "#B8842B", label: "verify" },
-  low:    { c: "#A6362F", label: "verify carefully" },
-};
-
-function ConfidenceDot({ level }) {
-  const m = CONF_META[level] || CONF_META.medium;
-  return (
-    <span className="conf" title={`Reliability: ${m.label}`}>
-      <span className="conf-dot" style={{ background: m.c }} />
-      {m.label}
-    </span>
-  );
-}
-
-function SourceLinks({ number }) {
-  const m = ruleMeta(number);
-  return (
-    <div className="src-row">
-      <a className="src-btn primary" href={m.canlii} target="_blank" rel="noreferrer">Rule {number} on CanLII ↗</a>
-      <a className="src-btn" href={m.elaws} target="_blank" rel="noreferrer">Ontario e-Laws ↗</a>
-    </div>
-  );
-}
-
-function ApiKeyBanner({ apiKey, setApiKey }) {
-  const [visible, setVisible] = useState(false);
-  const hasKey = apiKey.trim().length > 8;
-  return (
-    <div className="key-banner">
-      <span className="key-label">Anthropic API key</span>
-      <div className="key-field-wrap">
-        <input
-          className="key-input"
-          type={visible ? "text" : "password"}
-          placeholder="sk-ant-…"
-          value={apiKey}
-          autoComplete="off"
-          spellCheck={false}
-          onChange={e => {
-            setApiKey(e.target.value);
-            try { sessionStorage.setItem("flrn_apikey", e.target.value); } catch {}
-          }}
-        />
-        <button className="key-toggle" type="button" onClick={() => setVisible(v => !v)}>
-          {visible ? "Hide" : "Show"}
-        </button>
-      </div>
-      {hasKey
-        ? <span className="key-status">✓ Key set</span>
-        : <span className="key-missing">Enter a key to enable search</span>
+      html += '<div class="test-card"><div class="test-top">';
+      html += '<span class="test-name">' + esc(t.name) + '</span>';
+      if (t.source) html += '<span class="test-src">' + esc(t.source) + '</span>';
+      html += '</div>';
+      if (Array.isArray(t.elements) && t.elements.length) {
+        html += '<ol class="elements">';
+        t.elements.forEach(el => { html += '<li>' + esc(el) + '</li>'; });
+        html += '</ol>';
       }
-    </div>
-  );
-}
-
-/* ── ResultView ─────────────────────────────────────────────────────────── */
-function ResultView({ data, grounded, question, onRule }) {
-  const [copied, setCopied] = useState("");
-  async function handleCopy() {
-    const ok = await copyText(buildMemo(data, grounded, question));
-    setCopied(ok ? "Copied to clipboard" : "Copy failed — select the text manually");
-    setTimeout(() => setCopied(""), 2600);
+      html += '</div>';
+    });
+    html += '</div>';
   }
-  const p     = data.primaryRule || {};
-  const meta  = ruleMeta(p.number);
-  const title = p.title || meta.title;
 
-  return (
-    <div className="result">
-      <div className="result-head">
-        <div className="big-num" aria-hidden="true">{p.number}</div>
-        <div className="result-head-text">
-          <div className="eyebrow">Governing rule · O. Reg. 114/99</div>
-          <h2>Rule {p.number} — {title}</h2>
-          <SourceLinks number={p.number} />
-          <div className="memo-bar">
-            <button className="memo-btn" onClick={handleCopy}>
-              <span aria-hidden="true">▤</span> Copy to memo
-            </button>
-            {copied && <span className="copied">{copied}</span>}
-          </div>
-        </div>
-      </div>
-
-      {data.summary && (
-        <div className="block">
-          <h4 className="block-h">In plain terms</h4>
-          <p className="summary-text">{data.summary}</p>
-        </div>
-      )}
-
-      {Array.isArray(data.legalTests) && data.legalTests.length > 0 && (
-        <div className="block">
-          <h4 className="block-h">Legal test</h4>
-          {data.legalTests.map((t, i) => (
-            <div className="test-card" key={i}>
-              <div className="test-top">
-                <span className="test-name">{t.name}</span>
-                {t.source && <span className="test-src">{t.source}</span>}
-              </div>
-              {Array.isArray(t.elements) && t.elements.length > 0 && (
-                <ol className="elements">
-                  {t.elements.map((el, j) => <li key={j}>{el}</li>)}
-                </ol>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {Array.isArray(data.caseLaw) && data.caseLaw.length > 0 && (
-        <div className="block">
-          <h4 className="block-h">
-            Leading authorities
-            <span className="verify-tag">verify before citing</span>
-          </h4>
-          <div className="cases">
-            {data.caseLaw.map((c, i) => (
-              <div className="case-card" key={i}>
-                <div className="case-main">
-                  <div className="case-name">{c.name}</div>
-                  <div className="case-meta">{[c.citation, c.court, c.year].filter(Boolean).join(" · ")}</div>
-                  {c.holding && <div className="case-hold">{c.holding}</div>}
-                </div>
-                <div className="case-side">
-                  <ConfidenceDot level={c.confidence} />
-                  <a className="verify-btn" href={canliiCase(c.name, c.citation)} target="_blank" rel="noreferrer">
-                    Verify ↗
-                  </a>
-                </div>
-              </div>
-            ))}
-          </div>
-          {!grounded && (
-            <p className="not-grounded">
-              Fast mode: citations come from the model's memory. Enable grounding or verify each on CanLII.
-            </p>
-          )}
-        </div>
-      )}
-
-      {Array.isArray(data.practiceNotes) && data.practiceNotes.length > 0 && (
-        <div className="block">
-          <h4 className="block-h">Practice notes</h4>
-          <ul className="notes">
-            {data.practiceNotes.map((n, i) => <li key={i}>{n}</li>)}
-          </ul>
-        </div>
-      )}
-
-      {Array.isArray(data.relatedRules) && data.relatedRules.length > 0 && (
-        <div className="block">
-          <h4 className="block-h">Related rules</h4>
-          <div className="related">
-            {data.relatedRules.map((r, i) => (
-              <button key={i} className="rel-chip" onClick={() => onRule(r.number)}>
-                <b>r. {r.number}</b> {r.title || ruleMeta(r.number).title}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {Array.isArray(data.ruleCitations) && data.ruleCitations.length > 0 && (
-        <div className="citeline">
-          Provisions cited: {data.ruleCitations.join(", ")}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ── App ────────────────────────────────────────────────────────────────── */
-function App() {
-  const [apiKey, setApiKey]         = useState(() => { try { return sessionStorage.getItem("flrn_apikey") || ""; } catch { return ""; } });
-  const [query, setQuery]           = useState("");
-  const [grounded, setGrounded]     = useState(true);
-  const [loading, setLoading]       = useState(false);
-  const [result, setResult]         = useState(null);
-  const [rawFallback, setRawFallback] = useState("");
-  const [error, setError]           = useState("");
-  const [openIndex, setOpenIndex]   = useState(false);
-  const inputRef = useRef(null);
-
-  async function run(q) {
-    const question = (q ?? query).trim();
-    if (!question || loading) return;
-    setQuery(question);
-    setLoading(true);
-    setError("");
-    setResult(null);
-    setRawFallback("");
-    try {
-      const { parsed, raw } = await askClaude(question, grounded, apiKey);
-      if (parsed && parsed.primaryRule) setResult(parsed);
-      else setRawFallback(raw || "No readable answer returned. Try rephrasing, or disable grounding for a shorter reply.");
-    } catch (e) {
-      setError(e.message || "Something went wrong. Try again.");
-    } finally {
-      setLoading(false);
+  /* case law */
+  if (Array.isArray(data.caseLaw) && data.caseLaw.length) {
+    html += '<div class="block"><h4 class="block-h">Leading authorities <span class="verify-tag">verify before citing</span></h4>';
+    html += '<div class="cases">';
+    data.caseLaw.forEach(c => {
+      const cm = CONF_META[c.confidence] || CONF_META.medium;
+      const meta_parts = [c.citation, c.court, c.year].filter(Boolean).join(" · ");
+      html += '<div class="case-card">';
+      html += '<div class="case-main">';
+      html += '<div class="case-name">' + esc(c.name) + '</div>';
+      if (meta_parts) html += '<div class="case-meta">' + esc(meta_parts) + '</div>';
+      if (c.holding)  html += '<div class="case-hold">' + esc(c.holding) + '</div>';
+      html += '</div>';
+      html += '<div class="case-side">';
+      html += '<span class="conf" title="Reliability: ' + esc(cm.label) + '">';
+      html += '<span class="conf-dot" style="background:' + esc(cm.c) + '"></span>' + esc(cm.label);
+      html += '</span>';
+      html += '<a class="verify-btn" href="' + esc(canliiCase(c.name, c.citation)) + '" target="_blank" rel="noreferrer">Verify ↗</a>';
+      html += '</div></div>';
+    });
+    html += '</div>';
+    if (!grounded) {
+      html += '<p class="not-grounded">Fast mode: citations come from the model\'s memory. Enable grounding or verify each on CanLII.</p>';
     }
+    html += '</div>';
   }
 
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  /* practice notes */
+  if (Array.isArray(data.practiceNotes) && data.practiceNotes.length) {
+    html += '<div class="block"><h4 class="block-h">Practice notes</h4><ul class="notes">';
+    data.practiceNotes.forEach(n => { html += '<li>' + esc(n) + '</li>'; });
+    html += '</ul></div>';
+  }
 
-  return (
-    <div>
-      <ApiKeyBanner apiKey={apiKey} setApiKey={setApiKey} />
+  /* related rules */
+  if (Array.isArray(data.relatedRules) && data.relatedRules.length) {
+    html += '<div class="block"><h4 class="block-h">Related rules</h4><div class="related">';
+    data.relatedRules.forEach(r => {
+      const rt = r.title || ruleMeta(r.number).title;
+      html += '<button class="rel-chip" data-rule="' + esc(r.number) + '"><b>r. ' + esc(r.number) + '</b> ' + esc(rt) + '</button>';
+    });
+    html += '</div></div>';
+  }
 
-      <div className="wrap">
-        <header className="masthead">
-          <div className="crest">
-            <span className="crest-reg">O. Reg.</span>
-            <span className="crest-num">114/99</span>
-          </div>
-          <div className="mast-text">
-            <h1>Family Law Rules Navigator</h1>
-            <p className="mast-sub">
-              Ask in plain language — jump to the governing Rule, its test, and the leading authorities.
-            </p>
-          </div>
-        </header>
+  /* cite line */
+  if (Array.isArray(data.ruleCitations) && data.ruleCitations.length) {
+    html += '<div class="citeline">Provisions cited: ' + esc(data.ruleCitations.join(", ")) + '</div>';
+  }
 
-        <div className="caution" role="note">
-          <strong>Research aid, not authority.</strong>&ensp;AI-surfaced case law can be wrong or fabricated.
-          Read the rule text and confirm every citation on CanLII before you rely on or cite it.
-        </div>
+  html += '</div>'; /* /result */
 
-        <section className="search-section">
-          <div className="search-card">
-            <textarea
-              ref={inputRef}
-              className="search-textarea"
-              rows={2}
-              value={query}
-              placeholder="e.g. Opposing counsel wants to bring a motion to dismiss for delay — which rule governs?"
-              onChange={e => setQuery(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run(); }}
-            />
-            <div className="search-footer">
-              <label className="toggle-label" title="Runs a live web search to verify citations. Slower but more accurate.">
-                <input type="checkbox" checked={grounded} onChange={e => setGrounded(e.target.checked)} />
-                <span>{grounded ? "Grounded (web-verified)" : "Fast (from model)"}</span>
-              </label>
-              <button className="btn-go" onClick={() => run()} disabled={loading}>
-                {loading ? "Researching…" : "Find the rule"}
-              </button>
-            </div>
-          </div>
+  const container = document.getElementById("result-container");
+  container.innerHTML = html;
 
-          <div className="starters">
-            {STARTERS.map(s => (
-              <button key={s} className="chip" onClick={() => run(s)} disabled={loading}>{s}</button>
-            ))}
-          </div>
-          <div className="hint">⌘ / Ctrl + Enter to search</div>
-        </section>
+  /* wire up memo button */
+  const memoBtn = document.getElementById("memo-btn");
+  if (memoBtn) {
+    memoBtn.addEventListener("click", async () => {
+      const ok = await copyText(buildMemo(data, grounded, question));
+      const status = document.getElementById("copy-status");
+      if (status) {
+        status.textContent = ok ? "Copied to clipboard" : "Copy failed — select the text manually";
+        setTimeout(() => { status.textContent = ""; }, 2600);
+      }
+    });
+  }
 
-        {loading && (
-          <div className="panel loading-panel">
-            <div className="spinner" />
-            <div>
-              <div className="loading-title">Reading the Rules{grounded ? " and checking authorities" : ""}…</div>
-              <div className="loading-sub">Routing your question to O. Reg. 114/99.</div>
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="panel error-panel">
-            <div className="error-title">Couldn't complete the search</div>
-            <div className="error-body">{error}</div>
-            <button className="btn-retry" onClick={() => run(query)}>Try again</button>
-          </div>
-        )}
-
-        {rawFallback && !result && (
-          <div className="panel">
-            <div className="raw-label">Unstructured reply</div>
-            <pre className="raw">{rawFallback}</pre>
-          </div>
-        )}
-
-        {result && (
-          <ResultView
-            data={result}
-            grounded={grounded}
-            question={query}
-            onRule={n => run(`Give me an overview of Rule ${n} of the Family Law Rules.`)}
-          />
-        )}
-
-        <section className="index-wrap">
-          <button className="index-toggle" onClick={() => setOpenIndex(v => !v)}>
-            <span className={`index-arrow${openIndex ? " open" : ""}`}>▶</span>
-            Browse all rules by stage of a case
-          </button>
-          {openIndex && (
-            <div className="index-grid">
-              {GROUP_ORDER.map(g => (
-                <div className="index-col" key={g}>
-                  <h3 className="index-head">{g}</h3>
-                  <ul>
-                    {RULES.filter(r => r.g === g).map(r => (
-                      <li key={r.n}>
-                        <button
-                          className="rule-link"
-                          onClick={() => run(`Give me an overview of Rule ${r.n} (${r.t}) of the Family Law Rules — summary, legal test, and leading cases.`)}
-                        >
-                          <span className="rule-n">{r.n}</span>
-                          <span className="rule-t">{r.t}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <footer className="foot">
-          Sources link to{" "}
-          <a href={ELAWS} target="_blank" rel="noreferrer">Ontario e-Laws</a> and{" "}
-          <a href={CANLII} target="_blank" rel="noreferrer">CanLII</a>.
-          Not legal advice; verify against the current consolidated regulation.
-        </footer>
-      </div>
-    </div>
-  );
+  /* wire up related rule chips */
+  container.querySelectorAll(".rel-chip[data-rule]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const n = btn.getAttribute("data-rule");
+      run("Give me an overview of Rule " + n + " of the Family Law Rules.");
+    });
+  });
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+function buildIndexGrid() {
+  const grid = document.getElementById("index-grid");
+  let html = "";
+  GROUP_ORDER.forEach(g => {
+    const rules = RULES.filter(r => r.g === g);
+    html += '<div class="index-col"><h3 class="index-head">' + esc(g) + '</h3><ul>';
+    rules.forEach(r => {
+      html += '<li><button class="rule-link" data-rule="' + esc(r.n) + '" data-title="' + esc(r.t) + '">';
+      html += '<span class="rule-n">' + esc(r.n) + '</span><span class="rule-t">' + esc(r.t) + '</span>';
+      html += '</button></li>';
+    });
+    html += '</ul></div>';
+  });
+  grid.innerHTML = html;
+  grid.querySelectorAll(".rule-link[data-rule]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const n = btn.getAttribute("data-rule");
+      const t = btn.getAttribute("data-title");
+      run("Give me an overview of Rule " + n + " (" + t + ") of the Family Law Rules — summary, legal test, and leading cases.");
+    });
+  });
+}
+
+/* ── App state ──────────────────────────────────────────────────────────── */
+let _loading = false;
+let _currentQuery = "";
+let _grounded = true;
+
+function setLoading(v) {
+  _loading = v;
+  document.getElementById("btn-go").disabled = v;
+  document.getElementById("btn-go").textContent = v ? "Researching…" : "Find the rule";
+  document.querySelectorAll(".chip").forEach(c => { c.disabled = v; });
+  document.getElementById("loading-panel").style.display = v ? "" : "none";
+  document.getElementById("loading-title").textContent =
+    "Reading the Rules" + (_grounded ? " and checking authorities" : "") + "…";
+}
+
+function showError(msg) {
+  document.getElementById("error-panel").style.display = "";
+  document.getElementById("error-body").textContent = msg;
+}
+function hideError() { document.getElementById("error-panel").style.display = "none"; }
+
+function showRaw(text) {
+  document.getElementById("raw-panel").style.display = "";
+  document.getElementById("raw-body").textContent = text;
+}
+function hideRaw() { document.getElementById("raw-panel").style.display = "none"; }
+
+function clearResult() { document.getElementById("result-container").innerHTML = ""; }
+
+async function run(q) {
+  const question = (q !== undefined ? q : document.getElementById("query-input").value).trim();
+  if (!question || _loading) return;
+  _currentQuery = question;
+  document.getElementById("query-input").value = question;
+
+  const apiKey = document.getElementById("key-input").value;
+
+  setLoading(true);
+  hideError();
+  hideRaw();
+  clearResult();
+
+  try {
+    const { parsed, raw } = await askClaude(question, _grounded, apiKey);
+    if (parsed && parsed.primaryRule) {
+      renderResult(parsed, _grounded, question);
+    } else {
+      showRaw(raw || "No readable answer returned. Try rephrasing, or disable grounding for a shorter reply.");
+    }
+  } catch (e) {
+    showError(e.message || "Something went wrong. Try again.");
+  } finally {
+    setLoading(false);
+  }
+}
+
+/* ── Init ───────────────────────────────────────────────────────────────── */
+(function init() {
+  /* restore API key */
+  try {
+    const saved = sessionStorage.getItem("flrn_apikey");
+    if (saved) document.getElementById("key-input").value = saved;
+  } catch {}
+
+  /* key input */
+  const keyInput  = document.getElementById("key-input");
+  const keyStatus = document.getElementById("key-status");
+  const keyToggle = document.getElementById("key-toggle");
+
+  function updateKeyStatus() {
+    const hasKey = keyInput.value.trim().length > 8;
+    keyStatus.className = hasKey ? "key-status" : "key-missing";
+    keyStatus.textContent = hasKey ? "✓ Key set" : "Enter a key to enable search";
+    try { sessionStorage.setItem("flrn_apikey", keyInput.value); } catch {}
+  }
+  keyInput.addEventListener("input", updateKeyStatus);
+  updateKeyStatus();
+
+  keyToggle.addEventListener("click", () => {
+    const isPassword = keyInput.type === "password";
+    keyInput.type = isPassword ? "text" : "password";
+    keyToggle.textContent = isPassword ? "Hide" : "Show";
+  });
+
+  /* grounded toggle */
+  const groundedToggle = document.getElementById("grounded-toggle");
+  const groundedLabel  = document.getElementById("grounded-label");
+  groundedToggle.addEventListener("change", () => {
+    _grounded = groundedToggle.checked;
+    groundedLabel.textContent = _grounded ? "Grounded (web-verified)" : "Fast (from model)";
+  });
+
+  /* search */
+  const btnGo     = document.getElementById("btn-go");
+  const queryInput = document.getElementById("query-input");
+  btnGo.addEventListener("click", () => run());
+  queryInput.addEventListener("keydown", e => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run();
+  });
+  queryInput.focus();
+
+  /* retry */
+  document.getElementById("btn-retry").addEventListener("click", () => run(_currentQuery));
+
+  /* starter chips */
+  const startersDiv = document.getElementById("starters");
+  STARTERS.forEach(s => {
+    const btn = document.createElement("button");
+    btn.className = "chip";
+    btn.textContent = s;
+    btn.addEventListener("click", () => run(s));
+    startersDiv.appendChild(btn);
+  });
+
+  /* rule index toggle */
+  let indexOpen = false;
+  const indexToggle = document.getElementById("index-toggle");
+  const indexGrid   = document.getElementById("index-grid");
+  const indexArrow  = document.getElementById("index-arrow");
+  let indexBuilt = false;
+  indexToggle.addEventListener("click", () => {
+    indexOpen = !indexOpen;
+    indexGrid.style.display = indexOpen ? "" : "none";
+    indexArrow.classList.toggle("open", indexOpen);
+    if (indexOpen && !indexBuilt) { buildIndexGrid(); indexBuilt = true; }
+  });
+})();
 </script>
 </body>
 </html>
